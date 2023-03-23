@@ -1,0 +1,242 @@
+﻿@page "/exchanges"
+@using RabbitBlazor.Services
+@using RabbitBlazor.ViewModels
+@using System.Collections.ObjectModel
+@using RabbitBlazor.Common
+@inject ExchangeService ExchangeService
+@inject QueueService QueueService
+@inject MessagingService MessagingService
+
+<PageTitle>Exchanges</PageTitle>
+
+<div class="container">
+    <div class="row">
+        <div class="col-4">
+            <h1>Exchanges</h1>
+            <label>Name</label><br>
+            <input @bind-value="_exchangeName"/><br>
+            <input type="radio" checked="@(_exchangeType == ExchangeType.Direct)"
+                   name="_exchangeType" @onchange="@(() => _exchangeType = ExchangeType.Direct)"/>
+            <label>@nameof(ExchangeType.Direct)</label>
+            <input type="radio" checked="@(_exchangeType == ExchangeType.Fanout)"
+                   name="_exchangeType" @onchange="@(() => _exchangeType = ExchangeType.Fanout)"/>
+            <label>@nameof(ExchangeType.Fanout)</label>
+            <input type="radio" checked="@(_exchangeType == ExchangeType.Headers)"
+                   name="_exchangeType" @onchange="@(() => _exchangeType = ExchangeType.Headers)"/>
+            <label>@nameof(ExchangeType.Headers)</label>
+            <input type="radio" checked="@(_exchangeType == ExchangeType.Topic)"
+                   name="_exchangeType" @onchange="@(() => _exchangeType = ExchangeType.Topic)"/>
+            <label>@nameof(ExchangeType.Topic)</label><br/>
+            <button class="btn btn-primary" @onclick="HandleCreateExchange">Create Exchange</button><br/>
+        </div>
+        <div class="col-4">
+            <h1>Queues</h1>
+            <label>Name</label><br>
+            <input @bind-value="_queueName"/><br>
+            <label>Durable</label> <input type="checkbox" @bind-value="_queueDurable"/>|
+            <label>Exclusive</label> <input type="checkbox" @bind-value="_queueExclusive"/>|
+            <label>Auto Delete</label> <input type="checkbox" @bind-value="_queueAutoDelete"/><br>
+            <button class="btn btn-primary" @onclick="HandleCreateQueue">Create Queue</button><br/>
+        </div>
+        <div class="col-4">
+            <h1>Message to @( _sendMessageToExchange ? _selectedExchangeName : _selectedQueueName)</h1>
+            <input @bind-value="_messageText"/>
+            <button class="btn btn-dark" @onclick="SendMessage">Send</button>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-4">            
+            <hr/>
+            @if (_exchanges.Any())
+            {
+                <h3>Active exchanges</h3>
+                <table class="table-bordered">
+                    <thead><tr><th>Name</th><th>Internal</th><th>Durable</th><th>Auto Delete</th><th>Type</th><th>Delete</th></tr></thead>
+                    @foreach (var exchange in _exchanges)
+                    {
+                        <tr @onclick="async () => { await OnExchangeSelect(exchange.Name); }"
+                            class="@(_selectedExchangeName == exchange.Name ? "selected-tr" : "")">
+                            <td>@exchange.Name</td>
+                            <td>@exchange.Internal</td>
+                            <td>@exchange.Durable</td>
+                            <td>@exchange.AutoDelete</td>
+                            <td>@exchange.Type.ToString()</td>
+                            <td>
+                                <button class="btn-close"></button>
+                            </td>
+                        </tr>
+                    }
+                </table>
+            }
+        </div>
+        <div class="col-4">
+            <hr/>
+            @if (_queues.Any())
+            {
+                <h3>Active queues</h3>
+                <label>Dequeue messages on click</label><input type="checkbox" @bind-value="_dequeueMessages"/><br>
+                <table class="table-bordered">
+                    <thead><tr><th>Name</th><th>Exclusive</th><th>Durable</th><th>Auto Delete</th><th>Delete</th></tr></thead>
+                    @foreach (var queue in _queues)
+                    {
+                        <tr @onclick="() => OnQueueSelect(queue.Name)"
+                            class="@(_selectedQueueName == queue.Name ? "selected-tr" : "")">
+                            <td>@queue.Name</td>
+                            <td>@queue.Exclusive</td>
+                            <td>@queue.Durable</td>
+                            <td>@queue.AutoDelete</td>
+                            <td>
+                                <button class="btn-close" @onclick="() => HandleDeleteQueue(queue.Name)"></button>
+                            </td>
+                        </tr>
+                    }
+                </table>
+            }
+        </div>
+        <div class="col-4">
+            <hr/>
+            <table class="table-bordered">
+                @foreach (var message in _messages)
+                {
+                    <tr><td>@message</td></tr>
+                }
+            </table>
+        </div>
+    </div>
+    <div class="row">
+        <div class="col-8">
+            <hr/>
+            @if (_bindings.Any())
+            {
+                <h3>Binded exchanges</h3>
+                <table>
+                    @foreach (var binding in _bindings)
+                    {
+                        <tr>Source [@binding.Source]. Destination [@binding.Destination]. Routing Key [@binding.RoutingKey]</tr>
+                    }
+                </table>
+            }
+        </div>
+        <div class="col-4">
+            <hr/>
+            Selected exchange: @_selectedExchangeName <br/>
+            Selected queue: @_selectedQueueName <br/>
+            <button class="btn btn-secondary" @onclick="HandleBindExchange">Bind</button>
+        </div>
+    </div>
+</div>
+
+@code {
+    
+    protected override async Task OnInitializedAsync()
+    {
+        _exchanges = (await ExchangeService.GetExchanges()).ToList();
+        _queues = (await QueueService.GetQueues()).ToList();
+    }
+
+    private bool _sendMessageToExchange = true;
+
+    #region Exchanges
+
+    private List<Exchange> _exchanges = new();
+    private List<Binding> _bindings = new();
+    
+    private string _selectedExchangeName = "";
+    
+    //exchange form
+    private string _exchangeName = "";
+    private ExchangeType _exchangeType = ExchangeType.Direct;
+    
+    private void HandleCreateExchange()
+    {
+        if (string.IsNullOrEmpty(_exchangeName) || _exchanges.Any(x => x.Name == _exchangeName))
+        {
+            return;
+        }
+
+        var exchange = new Exchange(_exchangeName, false, false, false, _exchangeType);
+        ExchangeService.Create(exchange);
+        _exchanges.Add(exchange);
+        
+        _exchangeName = "";
+    }
+
+    private async Task OnExchangeSelect(string exchange)
+    {
+        _selectedExchangeName = exchange;
+        _sendMessageToExchange = true;
+        _bindings = (await ExchangeService.GetBindings(exchange: exchange)).ToList();
+    }
+
+    private void HandleBindExchange()
+    {
+        ExchangeService.Bind(_selectedExchangeName, _selectedQueueName);
+        _bindings.Add(new Binding(_selectedExchangeName, _selectedQueueName, "", Helper.CreateRoutingKey(_selectedExchangeName, _selectedQueueName), ""));
+    }
+
+    #endregion
+
+    #region Queues
+
+    private List<Queue> _queues = new();
+    private IEnumerable<string> _messages = new Collection<string>();
+    private bool _dequeueMessages;
+    //message form
+    private string _messageText = "";
+    private string _selectedQueueName = "";
+    //queue form
+    private string _queueName = "";
+    private bool _queueDurable;
+    private bool _queueExclusive;
+    private bool _queueAutoDelete;
+
+    private void HandleCreateQueue()
+    {
+        if (string.IsNullOrEmpty(_queueName) || _queues.Any(x => x.Name == _queueName))
+        {
+            return;
+        }
+
+        var queue = new Queue(_queueName, _queueDurable, _queueExclusive, _queueAutoDelete);
+        QueueService.Create(queue);
+        _queues.Add(queue);
+        
+        _queueName = "";
+        _queueExclusive = false;
+        _queueDurable = false;
+        _queueAutoDelete = false;
+    }
+
+    private void HandleDeleteQueue(string name)
+    {
+        QueueService.Delete(name);
+        _queues.RemoveAll(x => x.Name == name);
+        _selectedQueueName = "";
+    }
+
+    private void SendMessage()
+    {
+        if (_sendMessageToExchange)
+        {
+            var binding = _bindings.FirstOrDefault(x => x.Source == _selectedExchangeName);
+            if (binding == null) return;
+            MessagingService.PublishMessage(_selectedExchangeName, binding.RoutingKey, _messageText);
+        }
+        else
+        {
+            MessagingService.PublishMessage("", _selectedQueueName, _messageText);
+            OnQueueSelect(_selectedQueueName);
+        }
+        
+        _messageText = "";
+    }
+
+    private void OnQueueSelect(string queue)
+    {
+        _selectedQueueName = queue;
+        _sendMessageToExchange = false;
+        _messages = MessagingService.GetMessages(queue, !_dequeueMessages);
+    }
+
+    #endregion
+}
